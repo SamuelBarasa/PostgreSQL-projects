@@ -59,7 +59,7 @@ Every question below follows the same pattern: the question in plain English, th
 
 **File:** `circuits.csv`, 77 rows and 9 columns, with no blank or `\N` values.
 
-**Source:** Formula 1 circuits data, based on the circuits table of the Formula 1 World Championship dataset on Kaggle. *(Add the link to your copy of the source here.)*
+**Source:** Formula 1 circuits data, based on the circuits table of the Formula 1 World Championship dataset on Kaggle. https://www.kaggle.com/datasets/rohanrao/formula-1-world-championship-1950-2020
 
 | Column | Type | Description |
 |---|---|---|
