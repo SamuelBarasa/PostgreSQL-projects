@@ -1,0 +1,612 @@
+# Formula 1 Circuits: SQL Analysis in PostgreSQL
+
+A portfolio project that explores a dataset of 77 Formula 1 circuits using PostgreSQL. It answers ten analytical questions that move from simple filtering and aggregation to window functions, CTEs, string functions, and a geographic distance calculation (the haversine formula) built entirely in SQL.
+
+Every question below follows the same pattern: the question in plain English, the approach, the query, the result, and what the result means.
+
+---
+
+## Table of Contents
+
+1. [Project Overview](#project-overview)
+2. [Key Findings](#key-findings)
+3. [Dataset](#dataset)
+4. [Setup](#setup)
+5. [Data Quality Notes](#data-quality-notes)
+6. [Analysis](#analysis)
+   - [Q1: Which circuits sit at the highest altitude?](#q1-which-circuits-sit-at-the-highest-altitude)
+   - [Q2: Which countries host the most circuits?](#q2-which-countries-host-the-most-circuits)
+   - [Q3: Which circuits have "Grand Prix" in their name?](#q3-which-circuits-have-grand-prix-in-their-name)
+   - [Q4: How are circuits split across hemispheres?](#q4-how-are-circuits-split-across-hemispheres)
+   - [Q5: What is the altitude profile of each country's circuits?](#q5-what-is-the-altitude-profile-of-each-countrys-circuits)
+   - [Q6: Which circuits are below sea level or very high?](#q6-which-circuits-are-below-sea-level-or-very-high)
+   - [Q7: What is the highest circuit in each country?](#q7-what-is-the-highest-circuit-in-each-country)
+   - [Q8: How do altitude quartiles break down?](#q8-how-do-altitude-quartiles-break-down)
+   - [Q9: Do Wikipedia page names match the circuit references?](#q9-do-wikipedia-page-names-match-the-circuit-references)
+   - [Q10: Which circuits are closest to each other?](#q10-which-circuits-are-closest-to-each-other)
+7. [SQL Skills Demonstrated](#sql-skills-demonstrated)
+8. [Limitations](#limitations)
+9. [Possible Extensions](#possible-extensions)
+10. [Suggested Repository Structure](#suggested-repository-structure)
+
+---
+
+## Project Overview
+
+**Goal:** Practice and demonstrate intermediate-to-advanced SQL by answering real analytical questions about Formula 1 circuits.
+
+**Tool:** PostgreSQL (14 or later, see the note in Q9).
+
+**Scope:** One table, `circuits`, with 77 rows. A single small table is enough to cover filtering, grouping, `CASE` logic, CTEs, window functions (`RANK`, `NTILE`), string functions, and self joins.
+
+**Approach:** Each query is written to be readable first, with CTEs to separate steps, clear aliases, and checks on the results (for example, confirming that a self join returns the expected number of pairs).
+
+---
+
+## Key Findings
+
+- **Altitude is skewed toward sea level.** 64 of the 77 circuits are below 500 m, including one (Baku City Circuit) below sea level at -7 m. Only three are above 1,000 m.
+- **The highest circuit is Autódromo Hermanos Rodríguez** in Mexico at 2,227 m, well ahead of Kyalami in South Africa (1,460 m).
+- **The USA hosts the most circuits** by a wide margin: 12 once a labeling inconsistency is fixed (11 under `USA`, 1 under `United States`).
+- **The dataset is heavily northern.** 70 circuits are in the northern hemisphere and 7 in the southern. 47 are in the eastern hemisphere and 30 in the western.
+- **Altitude quartiles are very uneven in range.** The bottom three quartiles together cover only -7 m to 332 m, while the top quartile spans 345 m to 2,227 m.
+- **The two closest circuits are about 190 meters apart.** Both are Las Vegas entries, which suggests different layouts of the same location rather than separate venues.
+- **Wikipedia page names almost never equal `circuit_ref`.** After normalizing case and underscores, only 8 of 77 match, because the references are short nicknames while the pages use full titles.
+
+---
+
+## Dataset
+
+**File:** `circuits.csv`, 77 rows and 9 columns, with no blank or `\N` values.
+
+**Source:** Formula 1 circuits data, based on the circuits table of the Formula 1 World Championship dataset on Kaggle. *(Add the link to your copy of the source here.)*
+
+| Column | Type | Description |
+|---|---|---|
+| `circuit_id` | integer (primary key) | Unique ID for each circuit |
+| `circuit_ref` | varchar(90) | Short lowercase reference, such as `red_bull_ring` |
+| `name` | varchar(90) | Full circuit name |
+| `location` | varchar(90) | City or area |
+| `country` | varchar(90) | Country name |
+| `latitude` | double precision | Latitude in decimal degrees |
+| `longitude` | double precision | Longitude in decimal degrees |
+| `altitude` | integer | Altitude in meters above sea level |
+| `url` | text | Wikipedia page for the circuit |
+
+---
+
+## Setup
+
+### 1. Create the table
+
+```sql
+DROP TABLE IF EXISTS circuits;
+
+CREATE TABLE circuits (
+    circuit_id   integer PRIMARY KEY,
+    circuit_ref  varchar(90),
+    name         varchar(90),
+    location     varchar(90),
+    country      varchar(90),
+    latitude     double precision,
+    longitude    double precision,
+    altitude     integer,
+    url          text
+);
+```
+
+### 2. Load the CSV
+
+Using `psql` (adjust the path to your file):
+
+```sql
+\copy circuits FROM 'path/to/circuits.csv' WITH (FORMAT csv, HEADER true);
+```
+
+Or use the Import/Export tool in pgAdmin or DBeaver with format `csv`, header on, and a comma delimiter. The column **order** in the file must match the table.
+
+### 3. Verify the load
+
+```sql
+SELECT COUNT(*) FROM circuits;      -- expected: 77
+SELECT * FROM circuits LIMIT 5;
+```
+
+---
+
+## Data Quality Notes
+
+Checking the data before analyzing it turned up several things worth knowing:
+
+| Issue | Detail | How it is handled |
+|---|---|---|
+| **Inconsistent country label** | The USA appears as `USA` (11 circuits) and `United States` (1 circuit) | Cleaned with a `CASE` expression in the queries where it matters (Q2, Q7). The raw table is not modified. |
+| **No missing values** | No blank or `\N` values in any column | No NULL handling needed, though queries still use safe habits such as `NULLS LAST` where relevant |
+| **Percent-encoded URLs** | 7 URLs contain encoded accents, like `N%C3%BCrburgring` | Documented as a limitation in Q9. PostgreSQL has no built-in URL decoder. |
+| **URL anchors** | 2 URLs end with a section anchor, such as `#Circuit` | Stripped with `SPLIT_PART(url, '#', 1)` before extracting the page name |
+| **Mixed URL schemes** | URLs use both `http://` and `https://` | Not an issue, because the extraction works on the text after the last `/` |
+| **Near-duplicate venues** | Two Las Vegas entries sit about 190 m apart | Kept as separate rows and discussed in Q10 |
+
+---
+
+## Analysis
+
+### Q1: Which circuits sit at the highest altitude?
+
+**Approach:** Sort by altitude descending and keep the top 10. `NULLS LAST` protects against missing values pushing to the top of a descending sort. There are none in this file, but it is a good habit.
+
+```sql
+SELECT name, altitude
+FROM circuits
+ORDER BY altitude DESC NULLS LAST
+LIMIT 10;
+```
+
+**Result:**
+
+| Rank | Circuit | Altitude (m) |
+|---|---|---|
+| 1 | Autódromo Hermanos Rodríguez | 2,227 |
+| 2 | Kyalami | 1,460 |
+| 3 | Autódromo Internacional Nelson Piquet | 1,126 |
+| 4 | Charade Circuit | 790 |
+| 5 | Autódromo José Carlos Pace | 785 |
+| 6 | Red Bull Ring | 678 |
+| 7 | Zeltweg | 676 |
+| 8 | Las Vegas Strip Street Circuit | 642 |
+| 9 | Las Vegas Street Circuit | 639 |
+| 10 | Jarama | 609 |
+
+**Takeaway:** The top circuit is more than 700 m higher than the second. There are no ties at the 10th spot (the next circuit is Fuji Speedway at 583 m), so `LIMIT 10` does not cut anyone off unfairly. If ties were possible, `FETCH FIRST 10 ROWS WITH TIES` would keep them.
+
+---
+
+### Q2: Which countries host the most circuits?
+
+**Approach:** Group by country, count the rows, and filter the groups with `HAVING`. Because the filter depends on an aggregate, it has to be `HAVING` rather than `WHERE`. Clause order matters: `GROUP BY`, then `HAVING`, then `ORDER BY`.
+
+```sql
+SELECT country, COUNT(*) AS circuits
+FROM circuits
+GROUP BY country
+HAVING COUNT(*) > 3
+ORDER BY circuits DESC;
+```
+
+**Result (countries with more than 3 circuits):**
+
+| Country | Circuits |
+|---|---|
+| USA | 11 |
+| France | 7 |
+| Spain | 6 |
+| Italy | 4 |
+| Portugal | 4 |
+| UK | 4 |
+
+Without the `HAVING` clause, the query returns all 35 country labels in the raw data.
+
+**Cleaning the USA label:** one circuit is labeled `United States` rather than `USA`. Combining them gives the USA 12 circuits, which does not change the ranking but corrects the count:
+
+```sql
+SELECT CASE WHEN country = 'United States' THEN 'USA' ELSE country END AS country,
+       COUNT(*) AS circuits
+FROM circuits
+GROUP BY 1
+HAVING COUNT(*) > 3
+ORDER BY circuits DESC;
+```
+
+**Takeaway:** The USA, France, and Spain have the most circuits in this dataset. The query also surfaced a real data quality problem that would have understated the USA's count.
+
+---
+
+### Q3: Which circuits have "Grand Prix" in their name?
+
+**Approach:** Pattern matching with `LIKE`. The first attempt mixed a plain column with `COUNT` and no `GROUP BY`, which PostgreSQL rejects, so the list and the count are separate queries. A window function can return both at once.
+
+```sql
+-- The list
+SELECT name
+FROM circuits
+WHERE name LIKE '%Grand Prix%'
+ORDER BY name;
+
+-- The count
+SELECT COUNT(*) AS grand_prix_circuits
+FROM circuits
+WHERE name LIKE '%Grand Prix%';
+
+-- Both in one result
+SELECT name,
+       COUNT(*) OVER () AS total_matches
+FROM circuits
+WHERE name LIKE '%Grand Prix%';
+```
+
+**Result:** Only **one** circuit matches: Albert Park Grand Prix Circuit.
+
+**Takeaway:** The phrase is rare in circuit names. `LIKE` is case-sensitive in PostgreSQL, so `ILIKE` is the safer choice on messier text data, though it returns the same single row here.
+
+---
+
+### Q4: How are circuits split across hemispheres?
+
+**Approach:** Classify each circuit with `CASE` on the sign of its latitude and longitude, then count the groups. Latitude above zero is north and longitude above zero is east.
+
+```sql
+SELECT CASE WHEN latitude  > 0 THEN 'North' ELSE 'South' END AS lat_side,
+       CASE WHEN longitude > 0 THEN 'East'  ELSE 'West'  END AS long_side,
+       COUNT(*) AS circuits
+FROM circuits
+GROUP BY 1, 2
+ORDER BY circuits DESC;
+```
+
+**Result:**
+
+| Latitude | Longitude | Circuits |
+|---|---|---|
+| North | East | 43 |
+| North | West | 27 |
+| South | East | 4 |
+| South | West | 3 |
+
+Adding the quadrants gives the single-axis totals: **70 northern vs 7 southern**, and **47 eastern vs 30 western**, each summing to 77.
+
+**Takeaway:** The dataset is overwhelmingly northern. No circuit sits exactly on the equator or the prime meridian, so the `ELSE` branches never misclassify a row. On other data, a separate branch for a value of exactly 0 would be needed.
+
+---
+
+### Q5: What is the altitude profile of each country's circuits?
+
+**Approach:** Aggregate with `AVG`, `MIN`, and `MAX` per country, and keep only countries with at least 2 circuits using `HAVING`. `ROUND` keeps the average readable.
+
+```sql
+SELECT country,
+       COUNT(*)                AS circuits,
+       ROUND(AVG(altitude), 1) AS avg_altitude,
+       MIN(altitude)           AS min_altitude,
+       MAX(altitude)           AS max_altitude
+FROM circuits
+GROUP BY country
+HAVING COUNT(*) >= 2
+ORDER BY avg_altitude DESC;
+```
+
+**Result (14 countries):**
+
+| Country | Circuits | Avg altitude (m) | Min | Max |
+|---|---|---|---|---|
+| Brazil | 2 | 955.5 | 785 | 1,126 |
+| South Africa | 2 | 737.5 | 15 | 1,460 |
+| Austria | 2 | 677.0 | 676 | 678 |
+| France | 7 | 310.0 | 67 | 790 |
+| Japan | 3 | 298.0 | 45 | 583 |
+| Germany | 3 | 244.7 | 53 | 578 |
+| USA | 11 | 242.6 | 0 | 639 |
+| Belgium | 3 | 192.0 | 36 | 401 |
+| Canada | 3 | 186.3 | 13 | 332 |
+| Spain | 6 | 153.8 | 4 | 609 |
+| Italy | 4 | 145.8 | 37 | 255 |
+| Portugal | 4 | 106.0 | 28 | 158 |
+| UK | 4 | 101.5 | 20 | 153 |
+| Australia | 2 | 34.0 | 10 | 58 |
+
+**Takeaway:** Brazil and South Africa have the highest average altitudes. Averages over only two circuits are fragile, so the `COUNT(*)` column is included to show how much data stands behind each average. The `HAVING` filter also excludes Mexico, which has the single highest circuit in the dataset but only one entry. The lone `United States` row is excluded for the same reason.
+
+---
+
+### Q6: Which circuits are below sea level or very high?
+
+**Approach:** A `CASE` expression assigns a label. `CASE` is evaluated top to bottom and stops at the first match, so the second branch does not need to repeat "altitude >= 0".
+
+The cutoffs for Low and Mid (500 m and 1,000 m) are my own choice, since the question does not define them.
+
+```sql
+-- Label every circuit and see the distribution
+SELECT CASE WHEN altitude < 0    THEN 'Below sea level'
+            WHEN altitude < 500  THEN 'Low'
+            WHEN altitude < 1000 THEN 'Mid'
+            ELSE 'High'
+       END AS altitude_level,
+       COUNT(*) AS circuits
+FROM circuits
+GROUP BY 1
+ORDER BY MIN(altitude);
+
+-- Show only the extremes
+SELECT name,
+       altitude,
+       CASE WHEN altitude < 0    THEN 'Below sea level'
+            WHEN altitude < 500  THEN 'Low'
+            WHEN altitude < 1000 THEN 'Mid'
+            ELSE 'High'
+       END AS altitude_level
+FROM circuits
+WHERE altitude < 0 OR altitude > 1000
+ORDER BY altitude DESC;
+```
+
+**Result, distribution:**
+
+| Level | Circuits |
+|---|---|
+| Below sea level | 1 |
+| Low (0 to 499 m) | 63 |
+| Mid (500 to 999 m) | 10 |
+| High (1,000 m and above) | 3 |
+
+**Result, extremes only:**
+
+| Circuit | Altitude (m) | Level |
+|---|---|---|
+| Autódromo Hermanos Rodríguez | 2,227 | High |
+| Kyalami | 1,460 | High |
+| Autódromo Internacional Nelson Piquet | 1,126 | High |
+| Baku City Circuit | -7 | Below sea level |
+
+**Takeaway:** Once the filter is applied, "Low" and "Mid" can never appear, which is why both queries are included. The distribution query labels everything, and the filtered query isolates the extremes.
+
+---
+
+### Q7: What is the highest circuit in each country?
+
+**Approach:** `RANK() OVER (PARTITION BY country ORDER BY altitude DESC)` ranks circuits within each country. The rank is calculated in a CTE because a window function cannot be filtered in the same query's `WHERE`. `RANK()` is used instead of `ROW_NUMBER()` so that ties for first place would not be hidden.
+
+The USA label is cleaned first in a second CTE.
+
+```sql
+WITH cleaned AS (
+    SELECT name,
+           CASE WHEN country = 'United States' THEN 'USA' ELSE country END AS country,
+           altitude
+    FROM circuits
+),
+ranked AS (
+    SELECT name,
+           country,
+           altitude,
+           RANK() OVER (PARTITION BY country ORDER BY altitude DESC) AS altitude_rank
+    FROM cleaned
+)
+SELECT country, name, altitude
+FROM ranked
+WHERE altitude_rank = 1
+ORDER BY altitude DESC;
+```
+
+**Result:** 34 rows, one per country after cleaning. The top five:
+
+| Country | Highest circuit | Altitude (m) |
+|---|---|---|
+| Mexico | Autódromo Hermanos Rodríguez | 2,227 |
+| South Africa | Kyalami | 1,460 |
+| Brazil | Autódromo Internacional Nelson Piquet | 1,126 |
+| France | Charade Circuit | 790 |
+| Austria | Red Bull Ring | 678 |
+
+**Takeaway:** There are no ties for first place in any country. Without the cleaning step, `United States` would appear as its own "country" with the Las Vegas Strip Street Circuit (642 m), while `USA` would be split off with a different circuit. After cleaning, the Las Vegas Strip Street Circuit is the USA's highest, since the combined set's other circuits are lower.
+
+---
+
+### Q8: How do altitude quartiles break down?
+
+**Approach:** `NTILE(4)` sorts circuits by altitude and cuts them into four buckets of nearly equal size. A second query level then reports the size and altitude range of each bucket.
+
+```sql
+WITH quartiles AS (
+    SELECT name,
+           altitude,
+           NTILE(4) OVER (ORDER BY altitude) AS quartile
+    FROM circuits
+)
+SELECT quartile,
+       COUNT(*)      AS circuits,
+       MIN(altitude) AS min_altitude,
+       MAX(altitude) AS max_altitude
+FROM quartiles
+GROUP BY quartile
+ORDER BY quartile;
+```
+
+**Result:**
+
+| Quartile | Circuits | Min altitude (m) | Max altitude (m) |
+|---|---|---|---|
+| 1 | 20 | -7 | 18 |
+| 2 | 19 | 19 | 129 |
+| 3 | 19 | 130 | 332 |
+| 4 | 19 | 345 | 2,227 |
+
+**Takeaway:** With 77 circuits, the sizes are 20, 19, 19, and 19, because the leftover row goes to the first bucket. The *ranges* are what is interesting: the three lowest quartiles fit into the first 332 m, while the top quartile stretches over nearly 1,900 m. A few extreme circuits stretch the top end.
+
+**How this differs from Q6:** Q6 uses fixed thresholds that I choose, which produces very uneven group sizes (63, 10, 3, 1). `NTILE` forces equal group sizes and lets the data decide the boundaries. Q6 answers "how many circuits fit my definition of high?", while Q8 answers "how does each circuit rank relative to the others?". `NTILE` can split tied values across buckets, but there are no ties at any boundary in this data.
+
+---
+
+### Q9: Do Wikipedia page names match the circuit references?
+
+**Approach:** Extract the page name from the end of each URL, then compare it with `circuit_ref`. The comparison is done in three stages, because the naive version turns out to be useless.
+
+**Step 1: Extract the page name.** `SPLIT_PART` with a negative index returns the last piece after splitting on `/` (this needs PostgreSQL 14 or later). Anything after a `#` is stripped first.
+
+```sql
+SELECT circuit_ref,
+       SPLIT_PART(SPLIT_PART(url, '#', 1), '/', -1) AS page_name
+FROM circuits;
+```
+
+An alternative that works on any version anchors on the fixed `/wiki/` segment with `SUBSTRING` and `POSITION`:
+
+```sql
+SELECT circuit_ref,
+       SUBSTRING(url FROM POSITION('/wiki/' IN url) + 6) AS page_name
+FROM circuits;
+```
+
+**Step 2: The naive comparison fails.** Comparing the raw strings flags **all 77** circuits as different. References are lowercase with underscores (`red_bull_ring`) and page names are capitalized (`Red_Bull_Ring`), so no row matches exactly.
+
+**Step 3: Normalize both sides.** Lowercase and remove underscores on both sides before comparing:
+
+```sql
+WITH pages AS (
+    SELECT name,
+           circuit_ref,
+           SPLIT_PART(SPLIT_PART(url, '#', 1), '/', -1) AS page_name
+    FROM circuits
+)
+SELECT name, circuit_ref, page_name
+FROM pages
+WHERE LOWER(REPLACE(page_name, '_', '')) <> LOWER(REPLACE(circuit_ref, '_', ''))
+ORDER BY name;
+```
+
+After normalizing, **8 circuits match and 69 differ**. Most of those are not errors, because the reference is a nickname and the page uses the full title (`albert_park` versus `Melbourne_Grand_Prix_Circuit`).
+
+**A more meaningful check: containment.** Ask whether the page name *contains* the reference. `POSITION` returns 0 when there is no match:
+
+```sql
+WITH pages AS (
+    SELECT name,
+           circuit_ref,
+           SPLIT_PART(SPLIT_PART(url, '#', 1), '/', -1) AS page_name
+    FROM circuits
+)
+SELECT name, circuit_ref, page_name
+FROM pages
+WHERE POSITION(LOWER(REPLACE(circuit_ref, '_', ''))
+               IN LOWER(REPLACE(page_name, '_', ''))) = 0
+ORDER BY name;
+```
+
+This leaves **15 circuits**, the genuinely interesting mismatches, such as `albert_park` against `Melbourne_Grand_Prix_Circuit` and `imola` against `Autodromo_Enzo_e_Dino_Ferrari`.
+
+**Takeaway and limitations:**
+- An exact comparison gave a meaningless answer, so the normalization step is the real finding.
+- Percent-encoded accents (such as `N%C3%BCrburgring`) still count as mismatches, since decoding them would require a URL decoder and the `unaccent` extension.
+- `magny_cours` against `Magny-Cours` is flagged only because of the hyphen. Adding a second `REPLACE` for `-` would handle it.
+
+---
+
+### Q10: Which circuits are closest to each other?
+
+**Approach:** A self join pairs every circuit with every other circuit, and the haversine formula converts latitude and longitude differences into a distance along the Earth's surface.
+
+**Joining the table to itself.** The condition `a.circuit_id < b.circuit_id` removes self-pairs and keeps each pair only once. As a sanity check, 77 circuits should produce 77 × 76 ÷ 2 = **2,926** pairs. A join on `<>` would produce every pair twice.
+
+**The formula.** With latitude and longitude converted to radians:
+
+- `a = sin²(Δlat / 2) + cos(lat1) × cos(lat2) × sin²(Δlon / 2)`
+- `distance = 2 × R × asin(√a)`, where R is about 6,371 km
+
+```sql
+WITH pairs AS (
+    SELECT a.name AS circuit_a,
+           b.name AS circuit_b,
+           RADIANS(a.latitude)                 AS lat1,
+           RADIANS(b.latitude)                 AS lat2,
+           RADIANS(b.latitude - a.latitude)    AS dlat,
+           RADIANS(b.longitude - a.longitude)  AS dlon
+    FROM circuits a
+    JOIN circuits b ON a.circuit_id < b.circuit_id
+)
+SELECT circuit_a,
+       circuit_b,
+       ROUND((2 * 6371 * ASIN(SQRT(LEAST(1,
+           POWER(SIN(dlat / 2), 2)
+           + COS(lat1) * COS(lat2) * POWER(SIN(dlon / 2), 2)
+       ))))::numeric, 2) AS distance_km
+FROM pairs
+ORDER BY distance_km
+LIMIT 5;
+```
+
+Technical details:
+- `LEAST(1, ...)` protects `ASIN` from floating-point rounding pushing its input slightly above 1.
+- `::numeric` is needed because the two-argument `ROUND` does not accept `double precision` in PostgreSQL.
+- A CTE computes the radian values once so the formula is only written one time.
+
+**Result (five closest pairs):**
+
+| Circuit A | Circuit B | Distance (km) |
+|---|---|---|
+| Las Vegas Street Circuit | Las Vegas Strip Street Circuit | 0.19 |
+| Zeltweg | Red Bull Ring | 2.17 |
+| Montjuïc | Circuit de Pedralbes | 3.95 |
+| Autódromo do Estoril | Monsanto Park Circuit | 16.93 |
+| Circuit de Barcelona-Catalunya | Circuit de Pedralbes | 23.32 |
+
+**Takeaway:** The closest pair is about 190 meters apart, and the top three are all under 4 km. These pairs represent different layouts or eras at the same location or city rather than truly separate venues, and the table does not say which. The formula treats the Earth as a sphere with a 6,371 km radius, which is typically accurate to within roughly 0.5% and is plenty for ranking pairs.
+
+---
+
+## SQL Skills Demonstrated
+
+| Skill | Where it is used |
+|---|---|
+| Filtering, sorting, `LIMIT`, `NULLS LAST` | Q1 |
+| `GROUP BY`, `HAVING`, aggregates (`COUNT`, `AVG`, `MIN`, `MAX`) | Q2, Q5 |
+| Pattern matching (`LIKE`, `ILIKE`) | Q3 |
+| `CASE` expressions and conditional grouping | Q2, Q4, Q6 |
+| Window functions (`RANK`, `PARTITION BY`) | Q7 |
+| `NTILE` and distribution analysis | Q8 |
+| CTEs, including chained CTEs | Q7, Q8, Q9, Q10 |
+| String functions (`SPLIT_PART`, `SUBSTRING`, `POSITION`, `REPLACE`, `LOWER`) | Q9 |
+| Self joins | Q10 |
+| Math functions (`RADIANS`, `SIN`, `COS`, `ASIN`, `SQRT`, `POWER`) | Q10 |
+| Data cleaning inside queries | Q2, Q7, Q9 |
+| Result validation (row counts, tie checks) | Q1, Q8, Q10 |
+
+---
+
+## Limitations
+
+- **Small dataset.** With 77 rows and a single table, averages over a few circuits (for example, countries with two circuits) are not statistically robust.
+- **Altitude is a single number per circuit.** Real circuits vary in elevation across the track, so these values are a simplification.
+- **Distances use a spherical Earth.** The haversine formula is an approximation, and distances are measured between single coordinate points, not between track outlines.
+- **Circuit variants are not distinguished.** The table does not record which circuits are different layouts of the same site, which affects Q10.
+- **Country labels are not fully standardized.** Only the `USA` versus `United States` inconsistency was found and fixed. Other labels were not audited against an external standard.
+- **Percent-encoded URL text is not decoded** in Q9.
+
+---
+
+## Possible Extensions
+
+- Load the other tables from the same dataset (`races`, `drivers`, `results`, `lap_times`) and join them to `circuits`. This would unlock date functions, foreign keys, and questions such as which circuits hosted the most races or which have the fastest laps.
+- For each circuit, find its single nearest neighbor with `ROW_NUMBER() OVER (PARTITION BY ...)` on the Q10 pairs.
+- Add a foreign key relationship and index (for example, on `country`) and compare query plans with `EXPLAIN ANALYZE`.
+- Build a small dashboard (Power BI, Tableau, or Metabase) from the result tables.
+- Standardize country names with a lookup table.
+
+---
+
+## Suggested Repository Structure
+
+```
+f1-circuits-sql/
+├── data/
+│   └── circuits.csv
+├── sql/
+│   ├── 00_create_table.sql
+│   ├── 01_highest_altitude.sql
+│   ├── 02_circuits_per_country.sql
+│   ├── 03_grand_prix_names.sql
+│   ├── 04_hemispheres.sql
+│   ├── 05_altitude_by_country.sql
+│   ├── 06_altitude_labels.sql
+│   ├── 07_highest_per_country.sql
+│   ├── 08_altitude_quartiles.sql
+│   ├── 09_url_page_names.sql
+│   └── 10_closest_circuits.sql
+└── README.md
+```
+
+---
+
+## Author
+
+**[Your name]**
+[LinkedIn] | [GitHub] | [Email]
+
+*Built as a SQL portfolio project.*

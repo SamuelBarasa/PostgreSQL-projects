@@ -1,2 +1,0 @@
-# PostgreSQL-projects
-PSQL projects
