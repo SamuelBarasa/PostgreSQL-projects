@@ -68,8 +68,8 @@ Every question below follows the same pattern: the question in plain English, th
 | `name` | varchar(90) | Full circuit name |
 | `location` | varchar(90) | City or area |
 | `country` | varchar(90) | Country name |
-| `latitude` | double precision | Latitude in decimal degrees |
-| `longitude` | double precision | Longitude in decimal degrees |
+| `latitude` | Float | Latitude in decimal degrees |
+| `longitude` | Float | Longitude in decimal degrees |
 | `altitude` | integer | Altitude in meters above sea level |
 | `url` | text | Wikipedia page for the circuit |
 
@@ -88,16 +88,14 @@ CREATE TABLE circuits (
     name         varchar(90),
     location     varchar(90),
     country      varchar(90),
-    latitude     double precision,
-    longitude    double precision,
+    latitude     float,
+    longitude    float,
     altitude     integer,
     url          text
 );
 ```
 
 ### 2. Load the CSV
-
-Using `psql` (adjust the path to your file):
 
 ```sql
 \copy circuits FROM 'path/to/circuits.csv' WITH (FORMAT csv, HEADER true);
@@ -133,7 +131,7 @@ Checking the data before analyzing it turned up several things worth knowing:
 
 ### Q1: Which circuits sit at the highest altitude?
 
-**Approach:** Sort by altitude descending and keep the top 10. `NULLS LAST` protects against missing values pushing to the top of a descending sort. There are none in this file, but it is a good habit.
+**Approach:** Sort by altitude descending and keep the top 10. `NULLS LAST` protects against missing values pushing to the top of a descending sort.
 
 ```sql
 SELECT name, altitude
@@ -606,7 +604,7 @@ f1-circuits-sql/
 
 ## Author
 
-**[Your name]**
-[LinkedIn] | [GitHub] | [Email]
+**Samuel Barasa**
+[www.linkedin.com/in/samuel-kasuti-2a6119170 | samuelbarasa.github.io | [kasutisamuel1@gmil.com]
 
 *Built as a SQL portfolio project.*
