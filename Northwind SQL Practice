@@ -1,0 +1,195 @@
+/*
+Northwind SQL Practice
+======================
+
+Database: PostgreSQL
+Tables: lowercase snake_case Northwind tables
+Purpose: practice SELECT, JOIN, aggregation, grouping, and sorting.
+
+Run one query block at a time in psql or a PostgreSQL client.
+*/
+
+/*
+QUESTION 1
+What are the names of all customers in each country?
+
+Uses the customer's country, so each customer appears with their own
+recorded location. A customer may appear once; ORDER BY groups countries.
+*/
+SELECT
+    cust.country,
+    cust.contact_name AS customer_name,
+    cust.company_name
+FROM northwind_customers AS cust
+ORDER BY
+    cust.country,
+    cust.contact_name;
+
+
+/*
+QUESTION 2
+Which products belong to each category?
+
+LEFT JOIN keeps products even if they have no matching category.
+*/
+SELECT
+    cat.categoryname AS category_name,
+    prod.product_name
+FROM northwind_products AS prod
+LEFT JOIN northwind_categories AS cat
+    ON prod.category_id = cat.category_id
+ORDER BY
+    cat.categoryname,
+    prod.product_name;
+
+
+/*
+QUESTION 3
+What are the names of each order's customer and the employee who handled it?
+
+One row per order. This does not join order details, which would repeat an
+order once for every product line in that order.
+*/
+SELECT
+    ord.order_id,
+    cust.contact_name AS customer_name,
+    emp.first_name || ' ' || emp.last_name AS employee_name
+FROM northwind_orders AS ord
+JOIN northwind_employees AS emp
+    ON ord.employee_id = emp.employee_id
+LEFT JOIN northwind_customers AS cust
+    ON ord.customer_id = cust.customer_id
+ORDER BY
+    ord.order_id;
+
+
+/*
+QUESTION 4
+Which products were included in each order, and how many units of each
+were ordered?
+
+Each row is an order-product line. Quantity is stored in order_details.
+*/
+SELECT
+    det.order_id,
+    prod.product_name,
+    det.quantity AS units_ordered
+FROM northwind_order_details AS det
+JOIN northwind_products AS prod
+    ON det.product_id = prod.product_id
+ORDER BY
+    det.order_id,
+    prod.product_name;
+
+
+/*
+QUESTION 5
+Which five products have the highest total quantity ordered?
+
+SUM adds the quantities across all order lines for each product.
+*/
+SELECT
+    prod.product_id,
+    prod.product_name,
+    SUM(det.quantity) AS total_units_ordered
+FROM northwind_products AS prod
+JOIN northwind_order_details AS det
+    ON prod.product_id = det.product_id
+GROUP BY
+    prod.product_id,
+    prod.product_name
+ORDER BY
+    total_units_ordered DESC,
+    prod.product_name
+LIMIT 5;
+
+
+/*
+QUESTION 6
+How many orders did each customer place?
+
+COUNT(DISTINCT ...) counts orders rather than order-detail rows.
+Customers with zero orders are included by the LEFT JOIN.
+*/
+SELECT
+    cust.customer_id,
+    cust.contact_name AS customer_name,
+    COUNT(DISTINCT ord.order_id) AS total_orders
+FROM northwind_customers AS cust
+LEFT JOIN northwind_orders AS ord
+    ON cust.customer_id = ord.customer_id
+GROUP BY
+    cust.customer_id,
+    cust.contact_name
+ORDER BY
+    total_orders DESC,
+    cust.contact_name;
+
+
+/*
+QUESTION 7
+Which shippers handled the most orders?
+
+Counts orders assigned to each shipper via northwind_orders.ship_via.
+*/
+SELECT
+    ship.shipper_id,
+    ship.company_name AS shipper_name,
+    COUNT(ord.order_id) AS total_orders
+FROM northwind_shippers AS ship
+LEFT JOIN northwind_orders AS ord
+    ON ship.shipper_id = ord.ship_via
+GROUP BY
+    ship.shipper_id,
+    ship.company_name
+ORDER BY
+    total_orders DESC,
+    ship.company_name;
+
+
+/*
+QUESTION 8
+Which employees are assigned to which territories and regions?
+
+Employees can appear on multiple rows because an employee may cover multiple
+territories. The territory table links each territory to its region.
+*/
+SELECT
+    emp.employee_id,
+    emp.first_name,
+    emp.last_name,
+    ter.territory_description,
+    reg.region_description
+FROM northwind_employees AS emp
+JOIN northwind_employees_territories AS empt
+    ON emp.employee_id = empt.employee_id
+JOIN northwind_territories AS ter
+    ON empt.territory_id = ter.territory_id
+JOIN northwind_regions AS reg
+    ON ter.region_id = reg.region_id
+ORDER BY
+    emp.last_name,
+    emp.first_name,
+    reg.region_description,
+    ter.territory_description;
+
+
+/*
+QUESTION 9
+Which suppliers provide products in each category?
+
+One row per product, with its supplier and category.
+*/
+SELECT
+    sup.company_name AS supplier_name,
+    cat.categoryname AS category_name,
+    prod.product_name
+FROM northwind_products AS prod
+LEFT JOIN northwind_suppliers AS sup
+    ON prod.supplier_id = sup.supplier_id
+LEFT JOIN northwind_categories AS cat
+    ON prod.category_id = cat.category_id
+ORDER BY
+    sup.company_name,
+    cat.categoryname,
+    prod.product_name;
