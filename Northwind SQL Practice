@@ -16,6 +16,7 @@ What are the names of all customers in each country?
 Uses the customer's country, so each customer appears with their own
 recorded location. A customer may appear once; ORDER BY groups countries.
 */
+
 SELECT
     cust.country,
     cust.contact_name AS customer_name,
